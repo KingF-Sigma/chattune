@@ -1,0 +1,16 @@
+# Persoenliche Daten (werden beim Benutzen angelegt)
+settings.json
+profiles.json
+verlauf.txt
+statistik.json
+lyrics/
+settings.testbak.json
+
+# Lokal gebaut (Einstellungen > "EXE + Desktop-Verknuepfung")
+*.exe
+icon.ico
+
+# Alte Dateien
+*.bak
+Autostart-An.bat
+Autostart-Aus.bat

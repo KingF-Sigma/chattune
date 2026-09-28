@@ -1,0 +1,312 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Farben werden per Code gesetzt (Design + Akzentfarbe): C.Bg, C.Side, C.Card, C.Input, C.Hover, C.Text, C.Dim, C.Border, C.Accent, C.AccentText -->
+  <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+
+  <Style x:Key="Card" TargetType="Border">
+    <Setter Property="CornerRadius" Value="12"/>
+    <Setter Property="Background" Value="{DynamicResource C.Card}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource C.Border}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="18,14"/>
+    <Setter Property="Margin" Value="0,0,0,14"/>
+  </Style>
+
+  <Style x:Key="CardTitle" TargetType="TextBlock">
+    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+  </Style>
+
+  <Style x:Key="Desc" TargetType="TextBlock">
+    <Setter Property="FontSize" Value="11.5"/>
+    <Setter Property="Foreground" Value="{DynamicResource C.Dim}"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+  </Style>
+
+  <!-- Schiebeschalter -->
+  <Style x:Key="Switch" TargetType="CheckBox">
+    <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="CheckBox">
+          <Grid Background="Transparent" Margin="0,6">
+            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <ContentPresenter VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <Border x:Name="Track" Grid.Column="1" Width="40" Height="22" CornerRadius="11" Background="{DynamicResource C.Input}" VerticalAlignment="Center">
+              <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="{DynamicResource C.Dim}" HorizontalAlignment="Left" Margin="3,0"/>
+            </Border>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Track" Property="Background" Value="{DynamicResource C.Hover}"/>
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Track" Property="Background" Value="{DynamicResource C.Accent}"/>
+              <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/>
+              <Setter TargetName="Thumb" Property="Fill" Value="{DynamicResource C.AccentText}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Auswahl-Knoepfe -->
+  <Style x:Key="Pill" TargetType="RadioButton">
+    <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+    <Setter Property="FontSize" Value="12.5"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Margin" Value="0,0,6,6"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="RadioButton">
+          <Border x:Name="B" CornerRadius="8" Background="{DynamicResource C.Input}" Padding="12,6">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="B" Property="Background" Value="{DynamicResource C.Hover}"/>
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="B" Property="Background" Value="{DynamicResource C.Accent}"/>
+              <Setter Property="Foreground" Value="{DynamicResource C.AccentText}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Navigation links -->
+  <Style x:Key="NavItem" TargetType="RadioButton">
+    <Setter Property="Foreground" Value="{DynamicResource C.Dim}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Margin" Value="0,0,0,3"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="RadioButton">
+          <Border x:Name="B" CornerRadius="9" Background="Transparent" Height="40">
+            <Grid>
+              <Border x:Name="Bar" Width="3" Height="18" CornerRadius="2" HorizontalAlignment="Left" Background="{DynamicResource C.Accent}" Visibility="Hidden"/>
+              <StackPanel Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center">
+                <TextBlock x:Name="Icon" Text="{TemplateBinding Tag}" FontFamily="{DynamicResource Icons}" FontSize="15" Width="22" VerticalAlignment="Center"/>
+                <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center"/>
+              </StackPanel>
+            </Grid>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="B" Property="Background" Value="{DynamicResource C.Card}"/>
+              <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="B" Property="Background" Value="{DynamicResource C.Hover}"/>
+              <Setter TargetName="Bar" Property="Visibility" Value="Visible"/>
+              <Setter TargetName="Icon" Property="Foreground" Value="{DynamicResource C.Accent}"/>
+              <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+              <Setter Property="FontWeight" Value="SemiBold"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Knoepfe -->
+  <Style x:Key="Btn" TargetType="Button">
+    <Setter Property="Background" Value="{DynamicResource C.Input}"/>
+    <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+    <Setter Property="FontSize" Value="12.5"/>
+    <Setter Property="Padding" Value="14,8"/>
+    <Setter Property="Margin" Value="0,0,8,8"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="B" CornerRadius="8" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.85"/></Trigger>
+            <Trigger Property="IsPressed" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.65"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="AccentBtn" TargetType="Button" BasedOn="{StaticResource Btn}">
+    <Setter Property="Background" Value="{DynamicResource C.Accent}"/>
+    <Setter Property="Foreground" Value="{DynamicResource C.AccentText}"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+
+  <Style x:Key="IconBtn" TargetType="Button">
+    <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Icons}"/>
+    <Setter Property="FontSize" Value="15"/>
+    <Setter Property="Width" Value="40"/>
+    <Setter Property="Height" Value="40"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="B" CornerRadius="100" Background="Transparent">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Background" Value="{DynamicResource C.Hover}"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="PlayBtn" TargetType="Button">
+    <Setter Property="Foreground" Value="{DynamicResource C.AccentText}"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Icons}"/>
+    <Setter Property="FontSize" Value="18"/>
+    <Setter Property="Width" Value="50"/>
+    <Setter Property="Height" Value="50"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="B" CornerRadius="100" Background="{DynamicResource C.Accent}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.88"/></Trigger>
+            <Trigger Property="IsPressed" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.7"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="WinBtn" TargetType="Button">
+    <Setter Property="Foreground" Value="{DynamicResource C.Dim}"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Icons}"/>
+    <Setter Property="FontSize" Value="10"/>
+    <Setter Property="Width" Value="40"/>
+    <Setter Property="Height" Value="32"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="B" CornerRadius="8" Background="Transparent">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="B" Property="Background" Value="{DynamicResource C.Hover}"/>
+              <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style TargetType="TextBox">
+    <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource C.Text}"/>
+    <Setter Property="SelectionBrush" Value="{DynamicResource C.Accent}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="TextBox">
+          <Border x:Name="B" CornerRadius="8" Background="{DynamicResource C.Input}" BorderBrush="Transparent" BorderThickness="1" Padding="10,7">
+            <ScrollViewer x:Name="PART_ContentHost"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="B" Property="BorderBrush" Value="{DynamicResource C.Accent}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style TargetType="PasswordBox">
+    <Setter Property="Foreground" Value="{DynamicResource C.Text}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource C.Text}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="PasswordBox">
+          <Border CornerRadius="8" Background="{DynamicResource C.Input}" Padding="10,7">
+            <ScrollViewer x:Name="PART_ContentHost"/>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Schieberegler -->
+  <Style x:Key="SliderRepeat" TargetType="RepeatButton">
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="RepeatButton">
+          <Border Background="{TemplateBinding Background}" Height="4" CornerRadius="2"/>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style TargetType="Slider">
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="IsMoveToPointEnabled" Value="True"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Slider">
+          <Grid Height="20">
+            <Border Height="4" CornerRadius="2" Background="{DynamicResource C.Input}" VerticalAlignment="Center"/>
+            <Track x:Name="PART_Track" VerticalAlignment="Center">
+              <Track.DecreaseRepeatButton>
+                <RepeatButton Style="{StaticResource SliderRepeat}" Background="{DynamicResource C.Accent}" Command="Slider.DecreaseLarge"/>
+              </Track.DecreaseRepeatButton>
+              <Track.IncreaseRepeatButton>
+                <RepeatButton Style="{StaticResource SliderRepeat}" Background="Transparent" Command="Slider.IncreaseLarge"/>
+              </Track.IncreaseRepeatButton>
+              <Track.Thumb>
+                <Thumb>
+                  <Thumb.Template>
+                    <ControlTemplate><Ellipse Width="14" Height="14" Fill="White" Stroke="{DynamicResource C.Accent}" StrokeThickness="2"/></ControlTemplate>
+                  </Thumb.Template>
+                </Thumb>
+              </Track.Thumb>
+            </Track>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- schmale Scrollleiste -->
+  <Style TargetType="ScrollBar">
+    <Setter Property="Width" Value="6"/>
+    <Setter Property="MinWidth" Value="6"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ScrollBar">
+          <Track x:Name="PART_Track" IsDirectionReversed="True">
+            <Track.Thumb>
+              <Thumb>
+                <Thumb.Template>
+                  <ControlTemplate><Border CornerRadius="3" Background="{DynamicResource C.Hover}"/></ControlTemplate>
+                </Thumb.Template>
+              </Thumb>
+            </Track.Thumb>
+          </Track>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+</ResourceDictionary>
