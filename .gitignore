@@ -4,11 +4,14 @@ profiles.json
 verlauf.txt
 statistik.json
 lyrics/
+cache/
 settings.testbak.json
+/.txt
 
-# Lokal gebaut (Einstellungen > "EXE + Desktop-Verknuepfung")
+# Lokal gebaut (Einstellungen > Desktop-Verknuepfung)
 *.exe
 icon.ico
+/assets/preview.png
 
 # Alte Dateien
 *.bak

@@ -1,65 +1,84 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Spotify Chatbox" Width="1020" Height="690"
-        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-        ResizeMode="CanMinimize" WindowStartupLocation="CenterScreen"
-        FontFamily="Segoe UI" UseLayoutRounding="True" SnapsToDevicePixels="True">
-  <Border CornerRadius="14" Background="{DynamicResource C.Bg}" BorderBrush="{DynamicResource C.Border}" BorderThickness="1">
-    <Grid>
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="224"/>
-        <ColumnDefinition/>
-      </Grid.ColumnDefinitions>
+        Title="Spotify Chatbox" Width="1080" Height="720" MinWidth="900" MinHeight="600"
+        WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource C.Bg}" FontFamily="{DynamicResource Body}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display">
+  <!-- Normales (hardware-beschleunigtes) Fenster ohne Windows-Rahmen. Runde Ecken + Schatten kommen von Windows 11. -->
+  <WindowChrome.WindowChrome>
+    <!-- GlassFrameThickness 0: sonst zeichnet Windows einen hellen Rand ums Fenster -->
+    <WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
 
-      <!-- Seitenleiste -->
-      <Border Background="{DynamicResource C.Side}" CornerRadius="14,0,0,14" BorderBrush="{DynamicResource C.Border}" BorderThickness="0,0,1,0">
-        <DockPanel Margin="14,18,14,14">
-          <Grid x:Name="Brand" DockPanel.Dock="Top" Margin="6,0,0,24" Background="Transparent">
-            <StackPanel Orientation="Horizontal">
-              <Border Width="36" Height="36" CornerRadius="10" Background="{DynamicResource C.Accent}">
-                <TextBlock Text="&#x266B;" FontFamily="Segoe UI Symbol" FontSize="19" Foreground="{DynamicResource C.AccentText}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
-                <TextBlock Text="Spotify Chatbox" FontWeight="Bold" FontSize="14.5" Foreground="{DynamicResource C.Text}"/>
-                <TextBlock Text="f&#xFC;r VRChat" FontSize="11" Foreground="{DynamicResource C.Dim}"/>
-              </StackPanel>
+  <Grid x:Name="Root" RenderTransformOrigin="0.5,0.5" Background="{DynamicResource C.Bg}">
+    <Grid.RenderTransform><ScaleTransform/></Grid.RenderTransform>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="236"/>
+      <ColumnDefinition/>
+    </Grid.ColumnDefinitions>
+
+    <!-- Seitenleiste -->
+    <Border Background="{DynamicResource C.Side}" BorderBrush="{DynamicResource C.Border}" BorderThickness="0,0,1,0">
+      <DockPanel Margin="14,22,14,16">
+        <Grid x:Name="Brand" DockPanel.Dock="Top" Margin="8,0,0,30" Background="Transparent">
+          <StackPanel Orientation="Horizontal">
+            <Border Width="38" Height="38" CornerRadius="12" Background="{DynamicResource C.Accent}">
+              <TextBlock Text="&#x266B;" FontFamily="Segoe UI Symbol" FontSize="19" Foreground="{DynamicResource C.AccentText}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+              <TextBlock Text="Spotify Chatbox" FontFamily="{DynamicResource Display}" FontWeight="Bold" FontSize="15" Foreground="{DynamicResource C.Text}"/>
+              <TextBlock x:Name="TxtSubtitle" FontSize="11" Foreground="{DynamicResource C.Dim}"/>
             </StackPanel>
-          </Grid>
-
-          <Border DockPanel.Dock="Bottom" CornerRadius="10" Background="{DynamicResource C.Card}" BorderBrush="{DynamicResource C.Border}" BorderThickness="1" Padding="12,10">
-            <StackPanel>
-              <StackPanel Orientation="Horizontal">
-                <Ellipse x:Name="Dot" Width="8" Height="8" Fill="Gray" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                <TextBlock x:Name="TxtVr" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource C.Text}"/>
-              </StackPanel>
-              <TextBlock x:Name="TxtSide2" FontSize="11" Foreground="{DynamicResource C.Dim}" Margin="16,3,0,0" TextTrimming="CharacterEllipsis"/>
-            </StackPanel>
-          </Border>
-
-          <TextBlock DockPanel.Dock="Top" Text="MEN&#xDC;" FontSize="10.5" FontWeight="Bold" Foreground="{DynamicResource C.Dim}" Margin="8,0,0,8"/>
-          <StackPanel x:Name="Nav" DockPanel.Dock="Top"/>
-        </DockPanel>
-      </Border>
-
-      <!-- Inhalt -->
-      <Grid Grid.Column="1">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition/>
-        </Grid.RowDefinitions>
-        <Grid x:Name="TitleBar" Background="Transparent" Margin="30,18,12,12">
-          <StackPanel>
-            <TextBlock x:Name="PageTitle" FontSize="23" FontWeight="Bold" Foreground="{DynamicResource C.Text}"/>
-            <TextBlock x:Name="PageDesc" FontSize="12.5" Foreground="{DynamicResource C.Dim}" Margin="0,3,0,0"/>
-          </StackPanel>
-          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
-            <Button x:Name="BtnEnabled" Style="{StaticResource Btn}" Margin="0,2,14,0" Padding="16,8" FontWeight="SemiBold"/>
-            <Button x:Name="BtnMin" Style="{StaticResource WinBtn}" Content="&#xE921;"/>
-            <Button x:Name="BtnClose" Style="{StaticResource WinBtn}" Content="&#xE8BB;"/>
           </StackPanel>
         </Grid>
-        <Grid x:Name="Pages" Grid.Row="1"/>
+
+        <!-- Status unten -->
+        <Border DockPanel.Dock="Bottom" CornerRadius="14" Background="{DynamicResource C.Card}" BorderBrush="{DynamicResource C.Border}" BorderThickness="1" Padding="14,12">
+          <StackPanel>
+            <StackPanel Orientation="Horizontal">
+              <Grid Width="10" Height="10" Margin="0,0,9,0" VerticalAlignment="Center">
+                <Ellipse x:Name="DotGlow" Fill="Gray" Opacity="0.35" RenderTransformOrigin="0.5,0.5">
+                  <Ellipse.RenderTransform><ScaleTransform/></Ellipse.RenderTransform>
+                </Ellipse>
+                <Ellipse x:Name="Dot" Width="8" Height="8" Fill="Gray"/>
+              </Grid>
+              <TextBlock x:Name="TxtVr" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource C.Text}"/>
+            </StackPanel>
+            <TextBlock x:Name="TxtSide2" FontSize="11" Foreground="{DynamicResource C.Dim}" Margin="19,4,0,0" TextTrimming="CharacterEllipsis"/>
+          </StackPanel>
+        </Border>
+
+        <TextBlock x:Name="TxtMenu" DockPanel.Dock="Top" FontSize="10.5" FontWeight="Bold" Foreground="{DynamicResource C.Dim}" Margin="10,0,0,10" Opacity="0.8"/>
+        <!-- Der Hintergrund des aktiven Eintrags gleitet animiert zum ausgewaehlten Punkt -->
+        <Grid DockPanel.Dock="Top" VerticalAlignment="Top">
+          <Border x:Name="NavIndicator" Height="42" VerticalAlignment="Top" CornerRadius="11" Background="{DynamicResource C.Hover}">
+            <Border.RenderTransform><TranslateTransform/></Border.RenderTransform>
+            <Border Width="3" Height="18" CornerRadius="2" HorizontalAlignment="Left" Background="{DynamicResource C.Accent}"/>
+          </Border>
+          <StackPanel x:Name="Nav"/>
+        </Grid>
+      </DockPanel>
+    </Border>
+
+    <!-- Inhalt -->
+    <Grid Grid.Column="1">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition/>
+      </Grid.RowDefinitions>
+      <Grid x:Name="TitleBar" Background="Transparent" Margin="32,22,14,14">
+        <StackPanel>
+          <TextBlock x:Name="PageTitle" FontFamily="{DynamicResource Display}" FontSize="27" FontWeight="Bold" Foreground="{DynamicResource C.Text}"/>
+          <TextBlock x:Name="PageDesc" FontSize="12.5" Foreground="{DynamicResource C.Dim}" Margin="0,3,0,0"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+          <Button x:Name="BtnPause" Style="{StaticResource ChipBtn}" Margin="0,0,8,0"/>
+          <Button x:Name="BtnEnabled" Style="{StaticResource ChipBtn}"/>
+          <Button x:Name="BtnMin" Style="{StaticResource WinBtn}" Content="&#xE921;" Margin="0,0,4,0"/>
+          <Button x:Name="BtnClose" Style="{StaticResource CloseBtn}" Content="&#xE8BB;"/>
+        </StackPanel>
       </Grid>
+      <Grid x:Name="Pages" Grid.Row="1" ClipToBounds="True"/>
     </Grid>
-  </Border>
+  </Grid>
 </Window>

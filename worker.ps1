@@ -3,27 +3,25 @@
 
 $cfg = $sync.Cfg
 
+$lastError = @{ Msg = $null; At = [DateTime]::MinValue }
 function Log-Error([string]$msg) {
+    # Derselbe Fehler hoechstens einmal pro Minute, sonst ist das Log sofort voll
+    if ($msg -eq $lastError.Msg -and ((Get-Date) - $lastError.At).TotalSeconds -lt 60) { return }
+    $lastError.Msg = $msg; $lastError.At = Get-Date
     [void]$sync.Errors.Add("$(Get-Date -Format HH:mm:ss)  $msg")
     while ($sync.Errors.Count -gt 100) { $sync.Errors.RemoveAt(0) }
+    $sync.ErrorVersion++
 }
 
 function E([int]$codepoint) { [char]::ConvertFromUtf32($codepoint) }
+
+# Die wenigen Woerter, die direkt in der Chatbox stehen, in der App-Sprache
+function L([string]$de, [string]$en) { if ($sync.Lang -eq 'de') { $de } else { $en } }
 $emoji = @{
-    Note = E 0x1F3B5; Pause = E 0x23F8; Clock = E 0x1F552; Afk = E 0x1F4A4; Disc = E 0x1F4BF
-    Mic = E 0x1F3A4; Pc = E 0x1F4BB; Timer = E 0x23F1; Globe = E 0x1F30D; Heart = E 0x2764
-    Date = E 0x1F4C5; Hourglass = E 0x23F3; Game = E 0x1F3AE; Translate = E 0x1F310
+    Pause = E 0x23F8; Clock = E 0x1F552; Afk = E 0x1F4A4; Disc = E 0x1F4BF; Mic = E 0x1F3A4
+    Timer = E 0x23F1; Globe = E 0x1F30D; Translate = E 0x1F310; Check = E 0x2705
 }
 $playIcons = @((E 0x1F3B5), (E 0x1F3A7), (E 0x266A), "")
-$decoChars = @((E 0x2726), (E 0x22C6), (E 0x2727), (E 0x2605), (E 0x2661), (E 0x2740), (E 0x273F), (E 0x2729))
-
-# Genre (von iTunes) -> Emoji
-$genreEmoji = [ordered]@{
-    'hip.?hop|rap' = E 0x1F525; 'r&b|soul' = E 0x1F49C; 'dance|electro|house|techno' = E 0x1F3A7
-    'rock' = E 0x1F3B8; 'metal' = E 0x1F918; 'pop' = E 0x2728; 'alternative|indie' = E 0x1F319
-    'country' = E 0x1F920; 'classical|klassik' = E 0x1F3BB; 'jazz' = E 0x1F3B7; 'reggae' = E 0x1F334
-    'latin' = E 0x1F483; 'soundtrack' = E 0x1F3AC; 'schlager' = E 0x1F37B
-}
 
 # Kapitaelchen a-z (VRChat kann diese Zeichen darstellen, Fett/Kursiv-Unicode dagegen nicht)
 $smallCaps = @(0x1D00, 0x299, 0x1D04, 0x1D05, 0x1D07, 0xA730, 0x262, 0x29C, 0x26A, 0x1D0A, 0x1D0B, 0x29F, 0x1D0D,
@@ -60,7 +58,8 @@ $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
     $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
 function Await($op, [Type]$type) {
     $task = $asTask.MakeGenericMethod($type).Invoke($null, @($op))
-    [void]$task.Wait(-1)
+    # Nie ewig warten: haengt der Player, soll nicht das ganze Tool stehen bleiben
+    if (-not $task.Wait(5000)) { throw "Windows-Mediensteuerung antwortet nicht" }
     $task.Result
 }
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
@@ -113,8 +112,7 @@ function Get-CoverBytes($thumbnail) {
     $stream = Await ($thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
     $net = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($stream)
     $ms = New-Object System.IO.MemoryStream
-    $net.CopyTo($ms); $net.Dispose()
-    $ms.ToArray()
+    try { $net.CopyTo($ms); $ms.ToArray() } finally { $net.Dispose(); $stream.Dispose(); $ms.Dispose() }
 }
 
 function Invoke-MediaCommand([string]$cmd) {
@@ -137,11 +135,24 @@ function Invoke-MediaCommand([string]$cmd) {
 }
 
 # ---------------- Hintergrund-Downloads (blockieren nie) ----------------
+# Ein gemeinsamer Pool statt fuer jeden Download einen neuen Runspace (spart CPU und RAM)
+$pool = [runspacefactory]::CreateRunspacePool(1, 4)
+$pool.Open()
 $jobs = @{}
+$orphans = New-Object System.Collections.ArrayList   # ueberholte Downloads (z. B. schnelles Skippen), werden spaeter aufgeraeumt
 function Start-Async([string]$name, [string]$tag, [scriptblock]$script, $argument) {
+    if ($jobs[$name]) { [void]$orphans.Add($jobs[$name]); $jobs.Remove($name) }
     $ps = [PowerShell]::Create()
-    [void]$ps.AddScript($script).AddArgument($argument)
+    $ps.RunspacePool = $pool
+    [void]$ps.AddScript($script, $true).AddArgument($argument)
     $jobs[$name] = @{ Ps = $ps; Handle = $ps.BeginInvoke(); Tag = $tag }
+}
+function Clear-Orphans {
+    foreach ($o in @($orphans)) {
+        if (-not $o.Handle.IsCompleted) { continue }
+        try { [void]$o.Ps.EndInvoke($o.Handle) } catch {}
+        $o.Ps.Dispose(); $orphans.Remove($o)
+    }
 }
 function Test-AsyncRunning([string]$name) { $jobs[$name] -and -not $jobs[$name].Handle.IsCompleted }
 function Receive-Async([string]$name) {
@@ -155,8 +166,19 @@ function Receive-Async([string]$name) {
 
 # ---------------- Text-Bausteine ----------------
 function Format-Time([TimeSpan]$t) { "{0}:{1:00}" -f [int][Math]::Floor($t.TotalMinutes), $t.Seconds }
-function Limit([string]$s, [int]$max) { if ($s.Length -gt $max) { $s.Substring(0, $max - 3) + "..." } else { $s } }
+function Limit([string]$s, [int]$max) {
+    if ($s.Length -le $max) { return $s }
+    $cut = $max - 3
+    if ($cut -gt 0 -and [char]::IsHighSurrogate($s[$cut - 1])) { $cut-- }   # Emoji nicht in der Mitte zerschneiden
+    $s.Substring(0, $cut) + "..."
+}
 function Clean-Title([string]$t) { $t -replace '\s*[\(\[](feat|ft|with)\.?[^\)\]]*[\)\]]', '' }
+# Fuer die Suche (Lyrics/Cover) zusaetzlich Zusaetze wie "- 2014 Remaster" oder "- Radio Edit" weg
+function Search-Title([string]$t) {
+    (Clean-Title $t) -replace '(?i)\s+-\s+[^-]*\b(remaster(ed)?|edit|version|live|mono|stereo|feat\.?|dirty|clean|explicit|single)\b.*$', ''
+}
+# VRChat erlaubt 144 Zeichen; ohne Hintergrund brauchen wir 2 davon fuer die Steuerzeichen
+function Get-MaxLen { if ($cfg.NoBackground) { 142 } else { 144 } }
 
 function Get-Bar($info) {
     $style = $barStyles[[int]$cfg.BarStyle]
@@ -180,146 +202,149 @@ function Show-Song($info) {
     $true
 }
 
-function Get-SongLine($info, [int]$max) {
-    $icon = if (-not $info.Playing) { $emoji.Pause }
-            elseif ($cfg.GenreEmoji -and $st.GenreEmoji) { $st.GenreEmoji }
-            else { $playIcons[[int]$cfg.IconStyle] }
-    $title = $info.Title; $artist = $info.Artist
-    if ($cfg.SmallCaps) { $title = To-SmallCaps $title; if (-not $cfg.ArtistSuperscript) { $artist = To-SmallCaps $artist } }
-    $song = if ($cfg.ArtistSuperscript) { "$title $(To-Super 'by') $(To-Super $artist)" } else { "$title - $artist" }
-    if ($cfg.Marquee -and $song.Length -gt $max) {
-        $loop = "$song   " + [char]0x00B7 + "   "
-        $offset = ($st.Scroll * 4) % $loop.Length
-        $song = ($loop + $loop).Substring($offset, $max)
-    } else {
-        $song = Limit $song $max
+# Titel aufraeumen: Features "(feat. X)" und/oder Zusaetze wie "(Remastered)", "[Live]", "- Radio Edit" weg
+function Get-DisplayTitle($info) {
+    $t = "$($info.Title)"
+    if ($cfg.HideFeat) { $t = $t -replace '(?i)\s*[\(\[](feat|ft|with)\.?\s[^\)\]]*[\)\]]', '' -replace '(?i)\s+(feat|ft)\.?\s.*$', '' }
+    if ($cfg.HideBrackets) {
+        $t = $t -replace '\s*[\(\[][^\)\]]*[\)\]]', ''
+        $t = $t -replace '(?i)\s+-\s+[^-]*\b(remaster(ed)?|edit|version|live|mono|stereo|mix|remix|demo|acoustic|instrumental|dirty|clean|explicit|single|from)\b.*$', ''
     }
-    if ($cfg.SongNumber) { $song += "  #$($sync.SongCount)" }
-    "$icon $song".Trim()
+    $t = $t.Trim()
+    if ($t) { $t } else { "$($info.Title)" }   # nie einen leeren Titel zeigen
+}
+# Kuenstler: auf Wunsch nur der erste ("Kanye West" statt "Kanye West, Ty Dolla $ign")
+function Get-DisplayArtist($info) {
+    $a = "$($info.Artist)".Trim()
+    if ($cfg.MainArtistOnly -and $a) { $a = (($a -split ',|\s&\s|(?i)\s(feat|ft)\.?\s')[0]).Trim() }
+    $a
+}
+# Album ausblenden, wenn es genauso heisst wie der Song (typisch bei Singles)
+function Test-AlbumIsTitle($info) {
+    $norm = { param($s) ("$s".ToLower() -replace '\s*[\(\[][^\)\]]*[\)\]]', '' -replace '(?i)\s+-\s+.*$', '' -replace '[^\p{L}\p{N}]', '') }
+    $al = & $norm $info.Album
+    $al -and $al -eq (& $norm $info.Title)
+}
+
+# Songzeile aus Titel und/oder Kuenstler - $null, wenn beides ausgeschaltet ist
+function Get-SongLine($info, [int]$max) {
+    $title = Get-DisplayTitle $info; $artist = Get-DisplayArtist $info
+    # Manche Songs haben keinen Kuenstler -> dann zaehlt er als ausgeschaltet
+    $useTitle = $cfg.ShowTitle -and $title
+    $useArtist = $cfg.ShowArtist -and $artist
+    if (-not $useTitle -and -not $useArtist) { return $null }
+    $icon = if (-not $info.Playing) { $emoji.Pause } else { $playIcons[[int]$cfg.IconStyle] }
+    if ($cfg.SmallCaps) { $title = To-SmallCaps $title; if (-not $cfg.ArtistSuperscript) { $artist = To-SmallCaps $artist } }
+    $sep = if ("$($cfg.Separator)") { "$($cfg.Separator)" } else { " - " }
+    $joint = if ($cfg.ArtistSuperscript) { " $(To-Super 'by') " } else { $sep }
+    if ($cfg.ArtistSuperscript) { $artist = To-Super $artist }
+    $song = if (-not $useArtist) { $title }
+            elseif (-not $useTitle) { $artist }
+            elseif ($cfg.ArtistOwnLine) { $title }   # Kuenstler kommt in eine eigene Zeile, siehe Get-ArtistLine
+            else {
+                # Zu lang? Dann den Titel kuerzen, der Kuenstler bleibt immer sichtbar
+                $artist = Limit $artist 28
+                $room = $max - $joint.Length - $artist.Length
+                "$(Limit $title ([Math]::Max(12, $room)))$joint$artist"
+            }
+    "$icon $(Limit $song $max)".Trim()
+}
+# Eigene Kuenstler-Zeile (nur wenn Titel UND Kuenstler an sind und "Eigene Zeile" gewaehlt ist)
+function Get-ArtistLine($info) {
+    $artist = Get-DisplayArtist $info
+    if (-not ($cfg.ArtistOwnLine -and $cfg.ShowTitle -and $cfg.ShowArtist -and $artist -and "$($info.Title)".Trim())) { return $null }
+    if ($cfg.ArtistSuperscript) { return Limit "$(To-Super 'by') $(To-Super $artist)" 60 }
+    if ($cfg.SmallCaps) { $artist = To-SmallCaps $artist }
+    Limit "$(E 0x1F464) $artist" 60
 }
 
 function Get-StatusParts([bool]$short) {
     $parts = @()
-    if ($cfg.ShowClock) {
-        $fmt = if ($cfg.ClockSeconds) { 'HH:mm:ss' } else { 'HH:mm' }
-        $parts += "$(if (-not $short) { "$($emoji.Clock) " })$(Get-Date -Format $fmt)"
-    }
-    if ($cfg.ShowDate) { $parts += "$(if (-not $short) { "$($emoji.Date) " })$(Get-Date -Format 'dd.MM.')" }
-    if ($cfg.CountdownOn -and $cfg.CountdownTime -match '^(\d{1,2}):(\d{2})$') {
-        $target = (Get-Date).Date.AddHours([int]$Matches[1]).AddMinutes([int]$Matches[2])
-        if ($target -lt (Get-Date)) { $target = $target.AddDays(1) }
-        $diff = $target - (Get-Date)
-        $left = if ($diff.TotalHours -ge 1) { "{0}:{1:00} h" -f [int][Math]::Floor($diff.TotalHours), $diff.Minutes } else { "$([int][Math]::Ceiling($diff.TotalMinutes)) min" }
-        $parts += "$($emoji.Hourglass) $($cfg.CountdownLabel) in $left".Replace('  ', ' ')
-    }
+    if ($cfg.ShowClock) { $parts += "$(if (-not $short) { "$($emoji.Clock) " })$(Get-Date -Format 'HH:mm')" }
     if ($cfg.Playtime) {
         try {
             $span = (Get-Date) - (Get-Process -Name VRChat | Select-Object -First 1).StartTime
             $parts += "$($emoji.Timer) {0}:{1:00} h" -f [int][Math]::Floor($span.TotalHours), $span.Minutes
         } catch {}
     }
-    if ($cfg.InGameStatus) {
-        $parts += if ([Native]::ForegroundProcessName() -eq 'VRChat') { "$($emoji.Game) Im Spiel" } else { "$($emoji.Pc) Am Desktop" }
-    }
-    if ($cfg.WorldInfo -and $sync.World) { $parts += "$($emoji.Globe) $(Limit $sync.World 24) ($($sync.Players))" }
-    if ($cfg.WeatherOn -and $sync.Weather) { $parts += $sync.Weather }
-    if ($cfg.PcStats -or $cfg.GpuStats) {
-        $pc = @()
-        if ($cfg.PcStats) {
-            $cpu = [int](Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average
-            $os  = Get-CimInstance Win32_OperatingSystem
-            $ram = [int](100 - $os.FreePhysicalMemory / $os.TotalVisibleMemorySize * 100)
-            $pc += "CPU $cpu%"; $pc += "RAM $ram%"
-        }
-        if ($cfg.GpuStats -and $null -ne $st.Gpu) { $pc += "GPU $($st.Gpu)%" }
-        if ($pc) { $parts += "$($emoji.Pc) $($pc -join ' ')" }
-    }
-    $idle = [Native]::IdleMinutes()
+    if ($cfg.WorldInfo -and $sync.World -and $sync.VRChat) { $parts += "$($emoji.Globe) $(Limit $sync.World 32) ($($sync.Players))" }
     if ($cfg.Afk) { $parts += "$($emoji.Afk) AFK" }
-    elseif ($cfg.AutoAfk -and $idle -ge $cfg.AfkMinutes) { $parts += "$($emoji.Afk) AFK ($([int]$idle) min)" }
+    elseif ($cfg.AutoAfk) {
+        $idle = [Native]::IdleMinutes()
+        if ($idle -ge $cfg.AfkMinutes) { $parts += "$($emoji.Afk) AFK ($([int]$idle) min)" }
+    }
     # Mehrere Status-Texte mit ; getrennt -> wechseln alle 10 Sekunden
     $texts = @("$($cfg.StatusText)" -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($texts) { $parts += $texts[[int][Math]::Floor((Get-Date).TimeOfDay.TotalSeconds / 10) % $texts.Count] }
     ,$parts
 }
 
-# Rahmen, Deko und Zeichenlimit
-function Finish-Text($lines) {
-    $lines = @($lines | Where-Object { $null -ne $_ })
-    if ($cfg.Stars) { $c = E 0x2605; $lines = $lines | ForEach-Object { if ($_) { "$c $_ $c" } else { $_ } } }
-    elseif ($cfg.Deco -and $lines.Count -gt 0) { $lines[0] = "$($st.Deco) $($lines[0]) $($st.Deco)" }
-    Limit (($lines -join "`n").Trim("`n")) 144   # VRChat-Limit
-}
-
-function Get-LyricDisplay([string]$line) {
-    if ($cfg.LyricsSmallCaps) { To-SmallCaps $line } else { $line }
-}
 function Get-Translation([string]$line) {
     if (-not $cfg.Translate -or -not $lyr.Trans -or -not $line) { return $null }
     $t = $lyr.Trans[$line.Trim()]
     if ($t -and $t -ne $line.Trim()) { $t } else { $null }
 }
 
-# Zeilen mit Wichtigkeit (P). Passt nicht alles in die 144 Zeichen, fliegen zuerst die unwichtigsten
-# Zeilen raus - Songzeile (90) und Lyrics (100) bleiben immer. Reicht das nicht, wird die Songzeile gekuerzt.
-function Join-Lines($list) {
-    $lines = @(foreach ($i in $list) { if ($cfg.Stars -and $i.T) { "$(E 0x2605) $($i.T) $(E 0x2605)" } else { $i.T } })
-    if ($cfg.Deco -and -not $cfg.Stars -and $lines.Count -and $lines[0]) { $lines[0] = "$($st.Deco) $($lines[0]) $($st.Deco)" }
-    ($lines -join "`n").Trim("`n")
-}
+# Zeilen mit Wichtigkeit (P). Passt nicht alles rein, fliegen zuerst die unwichtigsten Zeilen raus -
+# Songzeile (90) und Lyrics (100) bleiben immer. Reicht das nicht, wird die Songzeile gekuerzt.
+function Join-Lines($list) { (@($list | ForEach-Object { $_.T }) -join "`n").Trim("`n") }
 function Fit-Lines($items) {
     $list = New-Object System.Collections.ArrayList
     foreach ($i in $items) { if ($null -ne $i.T) { [void]$list.Add($i) } }
-    while ((Join-Lines $list).Length -gt 144) {
+    $max = Get-MaxLen
+    while ((Join-Lines $list).Length -gt $max) {
         $drop = $null
         foreach ($i in $list) { if ($i.P -lt 90 -and (-not $drop -or $i.P -le $drop.P)) { $drop = $i } }
         if (-not $drop) { break }
         $list.Remove($drop)
     }
-    $over = (Join-Lines $list).Length - 144
+    $over = (Join-Lines $list).Length - $max
     $song = $list | Where-Object { $_.P -eq 90 } | Select-Object -First 1
     if ($over -gt 0 -and $song) { $song.T = Limit $song.T ([Math]::Max(12, $song.T.Length - $over)) }
-    Limit (Join-Lines $list) 144
+    Limit (Join-Lines $list) $max
 }
 
 function Build-ChatText($info) {
-    $st.Scroll++
     if ($cfg.Compact) { return Build-CompactText $info }
     $showSong = Show-Song $info
     $lyricsOn = ($cfg.ShowLyrics -or $cfg.LyricsMode) -and $showSong -and $lyr.Lines -and $lyr.Key -eq $st.LastKey
     $hideTitle = $cfg.HideTitleAfterLyrics -and $lyricsOn -and ((Get-Date) - $st.ChangedAt).TotalSeconds -gt 10
     $items = New-Object System.Collections.ArrayList
-    if ($showSong -and -not $hideTitle) { [void]$items.Add(@{ T = (Get-SongLine $info 60); P = 90 }) }
+    if ($showSong -and -not $hideTitle) {
+        $line = Get-SongLine $info 60; if ($line) { [void]$items.Add(@{ T = $line; P = 90 }) }
+        $aLine = Get-ArtistLine $info; if ($aLine) { [void]$items.Add(@{ T = $aLine; P = 70 }) }
+    }
 
     if ($cfg.LyricsMode -and $lyricsOn) {
         # Karaoke: Song, aktuelle Zeile, darunter Uebersetzung oder naechste Zeile
         $pair = Find-LyricPair $info.Pos.TotalSeconds
         $st.LastLyric = $pair[0]
         $note = [string][char]0x266A
-        $current = if ($pair[0]) { "$($emoji.Mic) $(Get-LyricDisplay $pair[0])" } else { "$note  $note  $note" }
+        $current = if ($pair[0]) { "$($emoji.Mic) $($pair[0])" } else { "$note  $note  $note" }
         [void]$items.Add(@{ T = $current; P = 100 })
         $tr = Get-Translation $pair[0]
-        if ($tr) { [void]$items.Add(@{ T = "$($emoji.Translate) $tr"; P = 60 }) }
-        elseif ($pair[1]) { [void]$items.Add(@{ T = "$([char]0x203A) $(Get-LyricDisplay $pair[1])"; P = 50 }) }
+        if ($tr) { [void]$items.Add(@{ T = "$($emoji.Translate) $tr"; P = 95 }) }
+        elseif ($pair[1]) { [void]$items.Add(@{ T = "$([char]0x203A) $($pair[1])"; P = 50 }) }
         return Fit-Lines $items
     }
 
     $songLines = $items.Count
     if ($showSong) {
-        if ($cfg.ShowAlbum -and $info.Album) { [void]$items.Add(@{ T = (Limit "$($emoji.Disc) $($info.Album)" 40); P = 30 }); $songLines++ }
+        if ($cfg.ShowAlbum -and $info.Album -and -not ($cfg.HideAlbumIfTitle -and (Test-AlbumIsTitle $info))) { [void]$items.Add(@{ T = (Limit "$($emoji.Disc) $($info.Album)" 40); P = 30 }); $songLines++ }
         if ($cfg.ShowBar -and $info.Length.TotalSeconds -gt 0) { [void]$items.Add(@{ T = (Get-Bar $info); P = 50 }); $songLines++ }
     }
     $rest = New-Object System.Collections.ArrayList
     $status = Get-StatusParts $false
-    if ($status) { [void]$rest.Add(@{ T = ($status -join $cfg.Separator); P = 40 }) }
+    # Status (Uhrzeit, Welt usw.) ist wichtiger als Balken und Album - die fliegen bei Platzmangel zuerst raus
+    if ($status) { [void]$rest.Add(@{ T = ($status -join $cfg.Separator); P = 60 }) }
     # Lyrics ganz unten, damit sie nicht zwischen festem Text stehen
     if ($lyricsOn) {
         $lyric = Find-Lyric $info.Pos.TotalSeconds
         $st.LastLyric = $lyric
         if ($lyric) {
-            [void]$rest.Add(@{ T = "$($emoji.Mic) $(Get-LyricDisplay $lyric)"; P = 100 })
+            [void]$rest.Add(@{ T = "$($emoji.Mic) $lyric"; P = 100 })
             $tr = Get-Translation $lyric
-            if ($tr) { [void]$rest.Add(@{ T = "$($emoji.Translate) $tr"; P = 60 }) }
+            if ($tr) { [void]$rest.Add(@{ T = "$($emoji.Translate) $tr"; P = 95 }) }   # Uebersetzung soll immer bleiben
         }
     }
     if ($cfg.BlankLine -and $songLines -and $rest.Count) { [void]$items.Add(@{ T = ""; P = 10 }) }
@@ -331,91 +356,187 @@ function Build-CompactText($info) {
     $parts = @()
     if (Show-Song $info) {
         $song = Get-SongLine $info 40
-        if ($cfg.ShowBar -and $info.Length.TotalSeconds -gt 0) { $song += " $(Format-Time $info.Pos)/$(Format-Time $info.Length)" }
-        $parts += $song
+        if ($cfg.ShowBar -and $info.Length.TotalSeconds -gt 0) { $song = "$song $(Format-Time $info.Pos)/$(Format-Time $info.Length)".Trim() }
+        if ($song) { $parts += $song }
     }
     $parts += Get-StatusParts $true
-    Finish-Text @($parts -join $cfg.Separator)
+    Limit ($parts -join $cfg.Separator) (Get-MaxLen)
 }
 
-# ---------------- Lyrics (eigene Datei oder lrclib.net) ----------------
-$lyr = @{ Key = $null; Lines = $null; Chorus = $null; Trans = $null; TransKey = $null }
+# ---------------- Lyrics (eigene Datei, Cache oder lrclib.net) ----------------
+$lyr = @{ Key = $null; Lines = $null; Trans = $null; TransKey = $null; TransRetry = [DateTime]::MinValue; Retry = $null }
 
 function Get-LyricsFileName($info) {
     $name = "$($info.Artist) - $(Clean-Title $info.Title).lrc" -replace '[\\/:*?"<>|]', '_'
     Join-Path $sync.LyricsDir $name
 }
 
+# Datei im cache-Ordner (Uebersetzungen als .json, geladene Lyrics als .lrc)
+$md5 = [System.Security.Cryptography.MD5]::Create()
+function Get-CacheFile([string]$key, [string]$ext = 'json') {
+    $hash = -join ($md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($key)) | ForEach-Object { $_.ToString('x2') })
+    Join-Path $sync.CacheDir "$hash.$ext"
+}
+
 function Set-LyricLines([string]$lrc) {
-    $lyr.Lines = @(foreach ($l in ($lrc -split "`r?`n")) {
+    $lyr.Lines = @(@(foreach ($l in ($lrc -split "`r?`n")) {
         if ($l -match '^\[(\d+):(\d+(?:\.\d+)?)\]\s*(.*)$') {
             [pscustomobject]@{ T = [int]$Matches[1] * 60 + [double]::Parse($Matches[2], [Globalization.CultureInfo]::InvariantCulture); L = $Matches[3].Trim() }
         }
-    }) | Sort-Object T
-    $lyr.Lines = @($lyr.Lines)
-    # Refrain = Zeilen, die mehrfach vorkommen
-    $lyr.Chorus = @{}
-    $lyr.Lines | Where-Object { $_.L } | Group-Object { $_.L.ToLower() } | Where-Object { $_.Count -ge 2 } |
-        ForEach-Object { $lyr.Chorus[$_.Name] = $true }
+    }) | Sort-Object T)
+    # fuer die Lyrics-Ansicht im Panel
+    $sync.LyricLines = $lyr.Lines; $sync.LyricsKey = $lyr.Key
 }
 
 function Start-LyricsFetch($info) {
     $key = "$($info.Title)|$($info.Artist)"
-    $lyr.Key = $key; $lyr.Lines = $null; $lyr.Trans = $null; $lyr.TransKey = $null
+    $lyr.Key = $key; $lyr.Lines = $null; $lyr.Trans = $null; $lyr.TransKey = $null; $lyr.TransRetry = [DateTime]::MinValue; $lyr.Retry = $null
+    $sync.LyricLines = $null; $sync.LyricsKey = $key
     $file = Get-LyricsFileName $info
     if (Test-Path $file) {
         Set-LyricLines (Get-Content $file -Raw -Encoding UTF8)
         $sync.LyricsStatus = "Eigene Lyrics"
         return
     }
+    # Schon mal geladen? Dann ohne Internet sofort da
+    $cached = Get-CacheFile "lrc|$key" 'lrc'
+    if (Test-Path $cached) {
+        Set-LyricLines (Get-Content $cached -Raw -Encoding UTF8)
+        $sync.LyricsStatus = "Gefunden"
+        return
+    }
     $sync.LyricsStatus = "Suche Lyrics..."
-    $artist = ($info.Artist -split ',')[0].Trim()
-    $url = "https://lrclib.net/api/search?track_name=$([uri]::EscapeDataString((Clean-Title $info.Title)))&artist_name=$([uri]::EscapeDataString($artist))"
+    $arg = New-Object object[] 3
+    $arg[0] = Search-Title $info.Title; $arg[1] = ($info.Artist -split ',')[0].Trim(); $arg[2] = [double]$info.Length.TotalSeconds
     Start-Async 'lyrics' $key {
-        param($u)
-        $wc = New-Object System.Net.WebClient
-        $wc.Encoding = [System.Text.Encoding]::UTF8   # sonst wird aus "ß" ein "ÃŸ"
-        $wc.Headers['User-Agent'] = 'SpotifyToVRChat'
-        $data = $wc.DownloadString($u) | ConvertFrom-Json
-        $data | Where-Object { $_.syncedLyrics } | Select-Object -First 1
-    } $url
+        param($a)
+        $title = $a[0]; $artist = $a[1]; $len = [double]$a[2]
+        try {
+            $wc = New-Object System.Net.WebClient
+            $wc.Encoding = [System.Text.Encoding]::UTF8   # sonst wird aus "ß" ein "ÃŸ"
+            $wc.Headers['User-Agent'] = 'SpotifyToVRChat (https://github.com)'
+            $find = { param($u) $data = $wc.DownloadString($u) | ConvertFrom-Json; $data | Where-Object { $_.syncedLyrics } }
+            $hits = @(& $find "https://lrclib.net/api/search?track_name=$([uri]::EscapeDataString($title))&artist_name=$([uri]::EscapeDataString($artist))")
+            if (-not $hits) { $hits = @(& $find "https://lrclib.net/api/search?q=$([uri]::EscapeDataString("$artist $title"))") }
+            # Die Version mit der passenden Laenge nehmen, sonst laufen die Lyrics neben der Musik her
+            if ($len -gt 0 -and $hits) {
+                $hits = @($hits | Sort-Object { [Math]::Abs([double]$_.duration - $len) })
+                if ([Math]::Abs([double]$hits[0].duration - $len) -gt 20) { $hits = @() }
+            }
+            [pscustomobject]@{ Ok = $true; Lrc = $(if ($hits) { $hits[0].syncedLyrics } else { $null }) }
+        } catch {
+            [pscustomobject]@{ Ok = $false; Error = "$_" }
+        }
+    } $arg
 }
 
-# Gibt $true zurueck, wenn gerade neue Lyrics angekommen sind
+# Gibt $true zurueck, wenn gerade neue Lyrics oder Uebersetzungen angekommen sind
 function Update-Lyrics($info) {
     $key = "$($info.Title)|$($info.Artist)"
     if ($key -ne $lyr.Key) { Start-LyricsFetch $info; return [bool]$lyr.Lines }
+    # Netzwerkfehler -> spaeter nochmal versuchen
+    if ($lyr.Retry -and (Get-Date) -ge $lyr.Retry -and -not (Test-AsyncRunning 'lyrics')) { Start-LyricsFetch $info }
     $r = Receive-Async 'lyrics'
     if ($r -and $r.Tag -eq $lyr.Key) {
-        $hit = $r.Result | Select-Object -First 1
-        if ($hit -and $hit.syncedLyrics) {
-            Set-LyricLines $hit.syncedLyrics
+        $res = $r.Result | Select-Object -First 1
+        if ($res -and $res.Ok -and $res.Lrc) {
+            Set-LyricLines $res.Lrc
+            try { $res.Lrc | Set-Content (Get-CacheFile "lrc|$($lyr.Key)" 'lrc') -Encoding UTF8 } catch {}
             $sync.LyricsStatus = "Gefunden"
             return $true
         }
-        $sync.LyricsStatus = "Keine Lyrics gefunden"
+        if ($res -and -not $res.Ok) {
+            $lyr.Retry = (Get-Date).AddSeconds(30)
+            $sync.LyricsStatus = "Keine Verbindung - neuer Versuch gleich"
+            Log-Error "Lyrics: $($res.Error)"
+        } else {
+            $sync.LyricsStatus = "Keine Lyrics gefunden"
+        }
     }
-    # Uebersetzung nachladen
-    if ($cfg.Translate -and $lyr.Lines -and $lyr.TransKey -ne "$($lyr.Key)|$($cfg.TranslateLang)" -and -not (Test-AsyncRunning 'translate')) {
-        $lyr.TransKey = "$($lyr.Key)|$($cfg.TranslateLang)"
-        $text = (@($lyr.Lines | Where-Object { $_.L } | ForEach-Object { $_.L }) | Select-Object -Unique) -join "`n"
-        Start-Async 'translate' $lyr.TransKey {
-            param($a)
-            $wc = New-Object System.Net.WebClient
-            $wc.Encoding = [System.Text.Encoding]::UTF8
-            $wc.Headers['User-Agent'] = 'Mozilla/5.0'
-            $u = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=$($a[1])&dt=t&q=$([uri]::EscapeDataString($a[0]))"
-            $resp = $wc.DownloadString($u) | ConvertFrom-Json
-            $map = @{}
-            if ("$($resp[2])" -ne $a[1]) {
-                foreach ($seg in $resp[0]) { if ($seg[1]) { $map[("$($seg[1])").Trim()] = ("$($seg[0])").Trim() } }
-            }
-            $map
-        } @($text, $cfg.TranslateLang)
+    # Uebersetzung nachladen (erst aus dem Cache, sonst aus dem Netz; bei Fehler spaeter nochmal)
+    $wantKey = "$($lyr.Key)|$($cfg.TranslateLang)"
+    if ($cfg.Translate -and $lyr.Lines -and $lyr.TransKey -ne $wantKey -and -not (Test-AsyncRunning 'translate') -and (Get-Date) -ge $lyr.TransRetry) {
+        $lyr.TransKey = $wantKey
+        $lyr.Trans = $null
+        $cacheFile = Get-CacheFile $wantKey
+        if (Test-Path $cacheFile) {
+            $lyr.Trans = @{}
+            try { (Get-Content $cacheFile -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $lyr.Trans[$_.Name] = $_.Value } } catch {}
+            return $true
+        }
+        $lines = @($lyr.Lines | Where-Object { $_.L } | ForEach-Object { $_.L.Trim() } | Select-Object -Unique)
+        $arg = New-Object object[] 2
+        $arg[0] = $lines; $arg[1] = "$($cfg.TranslateLang)"
+        Start-Async 'translate' $wantKey $translateScript $arg
     }
     $t = Receive-Async 'translate'
-    if ($t -and $t.Tag -eq $lyr.TransKey) { $lyr.Trans = $t.Result | Select-Object -First 1; return $true }
+    if ($t -and $t.Tag -eq $lyr.TransKey) {
+        $res = $t.Result | Select-Object -First 1
+        if ($res -and $res.Ok) {
+            $lyr.Trans = $res.Map
+            try { $res.Map | ConvertTo-Json | Set-Content (Get-CacheFile $lyr.TransKey) -Encoding UTF8 } catch {}
+            return $true
+        }
+        # Alle Dienste gerade blockiert -> in 20 Sekunden nochmal versuchen
+        $lyr.TransKey = $null
+        $lyr.TransRetry = (Get-Date).AddSeconds(20)
+        Log-Error "Übersetzung: $($res.Error)"
+    }
     $false
+}
+
+# Uebersetzt alle Zeilen. Zeilen werden gebuendelt (weniger Anfragen) und ueber die Zeilenumbrueche wieder zugeordnet.
+# Mehrere Google-Zugaenge, weil einzelne manchmal wegen zu vieler Anfragen blockieren.
+$translateScript = {
+    param($a)
+    $lines = @($a[0])
+    $target = $a[1]
+    $map = @{}
+
+    function Get-Web([string]$url) {
+        $wc = New-Object System.Net.WebClient
+        $wc.Encoding = [System.Text.Encoding]::UTF8
+        $wc.Headers['User-Agent'] = 'Mozilla/5.0'
+        $wc.DownloadString($url)
+    }
+    # Gibt @(Uebersetzung, erkannte Sprache) zurueck
+    function Invoke-Translate([string]$text) {
+        $q = [uri]::EscapeDataString($text)
+        try {
+            $r = Get-Web "https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=$target&q=$q" | ConvertFrom-Json
+            $first = $r[0]
+            if ($first -is [array]) { return ,@("$($first[0])", "$($first[1])") } else { return ,@("$first", "") }
+        } catch {
+            $r = Get-Web "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=$target&dt=t&q=$q" | ConvertFrom-Json
+            return ,@(((@($r[0]) | ForEach-Object { "$($_[0])" }) -join ''), "$($r[2])")
+        }
+    }
+
+    try {
+        # Buendel mit hoechstens ~1200 Zeichen
+        $chunks = New-Object System.Collections.ArrayList
+        $cur = New-Object System.Collections.ArrayList; $len = 0
+        foreach ($l in $lines) {
+            if ($len + $l.Length -gt 1200 -and $cur.Count) { [void]$chunks.Add($cur); $cur = New-Object System.Collections.ArrayList; $len = 0 }
+            [void]$cur.Add($l); $len += $l.Length + 1
+        }
+        if ($cur.Count) { [void]$chunks.Add($cur) }
+
+        foreach ($chunk in $chunks) {
+            $res = Invoke-Translate ($chunk -join "`n")
+            if ($res[1] -eq $target) { continue }   # schon in der Zielsprache
+            $out = @($res[0] -split "`n")
+            if ($out.Count -eq $chunk.Count) {
+                for ($i = 0; $i -lt $chunk.Count; $i++) { $map[$chunk[$i]] = $out[$i].Trim() }
+            } else {
+                # Zeilen passen nicht zusammen -> einzeln uebersetzen
+                foreach ($l in $chunk) { $map[$l] = (Invoke-Translate $l)[0].Trim(); Start-Sleep -Milliseconds 150 }
+            }
+        }
+        [pscustomobject]@{ Ok = $true; Map = $map }
+    } catch {
+        [pscustomobject]@{ Ok = $false; Map = $null; Error = "$_" }
+    }
 }
 
 function Find-LyricPair([double]$seconds) {
@@ -423,10 +544,9 @@ function Find-LyricPair([double]$seconds) {
     $t = $seconds + 0.3 + [double]$cfg.LyricsOffset
     $idx = -1
     for ($i = 0; $i -lt $lyr.Lines.Count; $i++) { if ($lyr.Lines[$i].T -le $t) { $idx = $i } else { break } }
-    $ok = { param($l) $l.L -and (-not $cfg.ChorusOnly -or $lyr.Chorus[$l.L.ToLower()]) }
-    $current = if ($idx -ge 0 -and (& $ok $lyr.Lines[$idx])) { $lyr.Lines[$idx].L } else { $null }
+    $current = if ($idx -ge 0 -and $lyr.Lines[$idx].L) { $lyr.Lines[$idx].L } else { $null }
     $next = $null
-    for ($i = $idx + 1; $i -lt $lyr.Lines.Count; $i++) { if (& $ok $lyr.Lines[$i]) { $next = $lyr.Lines[$i].L; break } }
+    for ($i = $idx + 1; $i -lt $lyr.Lines.Count; $i++) { if ($lyr.Lines[$i].L) { $next = $lyr.Lines[$i].L; break } }
     ,@($current, $next)
 }
 function Find-Lyric([double]$seconds) { (Find-LyricPair $seconds)[0] }
@@ -443,17 +563,23 @@ function Get-LivePos {
 $vrLog = @{ File = $null; Pos = 0; Players = New-Object 'System.Collections.Generic.HashSet[string]' }
 function Update-WorldInfo {
     $dirLog = Join-Path $env:USERPROFILE "AppData\LocalLow\VRChat\VRChat"
-    $file = Get-ChildItem $dirLog -Filter 'output_log_*.txt' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+    # Nach Name sortieren (enthaelt Datum+Uhrzeit): Groesse und Aenderungszeit meldet Windows bei einer
+    # Datei, in die VRChat gerade schreibt, oft veraltet (z. B. 0 Bytes) - deshalb nur die offene Datei fragen
+    $file = Get-ChildItem $dirLog -Filter 'output_log_*.txt' -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1
     if (-not $file) { return }
     if ($file.FullName -ne $vrLog.File) { $vrLog.File = $file.FullName; $vrLog.Pos = 0; $vrLog.Players.Clear() }
-    if ($file.Length -le $vrLog.Pos) { return }
-    $fs = [System.IO.File]::Open($file.FullName, 'Open', 'Read', 'ReadWrite')
+    $fs = [System.IO.File]::Open($file.FullName, 'Open', 'Read', 'ReadWrite, Delete')
     try {
+        if ($fs.Length -le $vrLog.Pos) { return }
         [void]$fs.Seek($vrLog.Pos, 'Begin')
-        $reader = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
-        $chunk = $reader.ReadToEnd()
-        $vrLog.Pos = $fs.Position
+        $bytes = New-Object byte[] ($fs.Length - $vrLog.Pos)
+        $read = $fs.Read($bytes, 0, $bytes.Length)
     } finally { $fs.Dispose() }
+    # Nur bis zum letzten Zeilenende lesen, eine halb geschriebene Zeile kommt beim naechsten Mal
+    $end = [Array]::LastIndexOf($bytes, [byte]10, $read - 1)
+    if ($end -lt 0) { return }
+    $chunk = [System.Text.Encoding]::UTF8.GetString($bytes, 0, $end + 1)
+    $vrLog.Pos += $end + 1
     foreach ($line in ($chunk -split "`n")) {
         if ($line -match 'Entering Room: (.+?)\s*$') { $sync.World = $Matches[1]; $vrLog.Players.Clear() }
         elseif ($line -match 'OnPlayerJoined (.+?)(?: \(usr_[^)]*\))?\s*$') { [void]$vrLog.Players.Add($Matches[1]) }
@@ -470,21 +596,30 @@ function Get-OscPaddedString([string]$s) {
     ,$buf
 }
 
+function Get-OscPort {
+    $port = 0
+    if ($sync.PortOverride) { return [int]$sync.PortOverride }
+    if (-not [int]::TryParse("$($cfg.OscPort)", [ref]$port) -or $port -lt 1 -or $port -gt 65535) { $port = 9000 }   # Tippfehler im Panel
+    $port
+}
+
 $udp = $null
 function Send-Chatbox([string]$text) {
-    $port = if ($sync.PortOverride) { $sync.PortOverride } else { [int]$cfg.OscPort }
-    if (-not $udp -or $st.UdpTarget -ne "$($cfg.OscHost):$port") {
+    $port = Get-OscPort
+    $oscHost = "$($cfg.OscHost)".Trim(); if (-not $oscHost) { $oscHost = "127.0.0.1" }
+    if (-not $udp -or $st.UdpTarget -ne "${oscHost}:$port") {
         if ($udp) { $udp.Close() }
         $script:udp = New-Object System.Net.Sockets.UdpClient
-        $udp.Connect($cfg.OscHost, $port)
-        $st.UdpTarget = "$($cfg.OscHost):$port"
+        $udp.Connect($oscHost, $port)
+        $st.UdpTarget = "${oscHost}:$port"
     }
-    # /chatbox/input <string> <true = sofort senden> <Benachrichtigungston ja/nein>
-    $tags = if ($cfg.Sound -and $text) { ",sTT" } else { ",sTF" }
+    # /chatbox/input <string> <true = sofort senden> <false = kein Benachrichtigungston>
+    $tags = ",sTF"
     # Diese zwei unsichtbaren Steuerzeichen am Ende lassen VRChat den dunklen Kasten weg
     if ($cfg.NoBackground -and $text) { $text = (Limit $text 142) + [char]0x03 + [char]0x1F }
     $packet = (Get-OscPaddedString "/chatbox/input") + (Get-OscPaddedString $tags) + (Get-OscPaddedString $text)
     [void]$udp.Send([byte[]]$packet, $packet.Length)
+    $st.LastSend = [DateTime]::Now
 }
 function Clear-Chatbox { if (-not $st.Cleared) { Send-Chatbox ""; $st.Cleared = $true } }
 
@@ -507,22 +642,30 @@ function Save-Stats { try { $stats | ConvertTo-Json | Set-Content $sync.StatsPat
 
 # ---------------- Schleife ----------------
 $st = @{
-    LastKey = $null; Cleared = $true; Scroll = 0; ChangedAt = Get-Date; CoverKey = $null
-    LastLyric = $null; LastSend = [DateTime]::MinValue; UdpTarget = $null; Deco = $decoChars[0]
-    GenreEmoji = $null; Gpu = $null; LastVoice = [DateTime]::MinValue; ParamState = @{}
-    WeatherCity = $null; WasSpeaking = $false; LastTick = [DateTime]::Now; StatsSaved = [DateTime]::Now; ListenerRetry = [DateTime]::MinValue
+    LastKey = $null; Cleared = $true; ChangedAt = Get-Date; LastLyric = $null
+    CoverSource = $null; ThumbHash = $null; ThumbTries = 0; ThumbAt = [DateTime]::MinValue
+    LastSend = [DateTime]::MinValue; UdpTarget = $null; LastVoice = [DateTime]::MinValue; WasSpeaking = $false
+    WasPaused = $false; LastTick = [DateTime]::Now; StatsSaved = [DateTime]::Now; Played = 0.0; LogPending = $null; LogNeed = 30
 }
 $minGap = 1.5   # Sekunden zwischen zwei Nachrichten, sonst sperrt VRChat die Chatbox kurz
-$next = @{ Send = [DateTime]::MinValue; Info = [DateTime]::MinValue; World = [DateTime]::MinValue
-           Weather = [DateTime]::MinValue; Heart = [DateTime]::MinValue; Gpu = [DateTime]::MinValue; VrCheck = [DateTime]::MinValue }
+$next = @{ Send = [DateTime]::MinValue; Info = [DateTime]::MinValue; World = [DateTime]::MinValue; VrCheck = [DateTime]::MinValue; Focus = [DateTime]::MinValue }
 
 while (-not $sync.Exit) {
     try {
         $now = [DateTime]::Now
 
-        # Knoepfe aus dem Panel / Tastenkuerzel / Avatar
+        # Knoepfe aus dem Panel / Tastenkuerzel
         $cmd = $null
         while ($sync.Commands.TryDequeue([ref]$cmd)) {
+            if ($cmd -eq 'test') {
+                # Verbindungstest: kurze Nachricht, dann normal weiter
+                try {
+                    Send-Chatbox "$($emoji.Check) Spotify Chatbox: $(L 'Verbindung OK' 'Connection OK')"
+                    $st.Cleared = $false; $next.Send = $now.AddSeconds(4)
+                    $sync.TestResult = 'ok'
+                } catch { $sync.TestResult = "$_"; Log-Error "Test: $_" }
+                continue
+            }
             try { Invoke-MediaCommand $cmd } catch { Log-Error "Befehl $cmd : $_" }
             Start-Sleep -Milliseconds 200
             $sync.Dirty = $true
@@ -532,6 +675,11 @@ while (-not $sync.Exit) {
         if ($now -ge $next.VrCheck) {
             $sync.VRChat = [bool](Get-Process -Name VRChat -ErrorAction SilentlyContinue)
             $next.VrCheck = $now.AddSeconds(2)
+            # OSC an? VRChat lauscht dann auf dem Port. Nur pruefbar, wenn VRChat auf diesem PC laeuft.
+            $sync.OscOk = if ($sync.VRChat -and "$($cfg.OscHost)".Trim() -in '', '127.0.0.1', 'localhost') {
+                $port = Get-OscPort
+                [bool]([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveUdpListeners() | Where-Object { $_.Port -eq $port })
+            } else { $null }
         }
         $eco = -not $sync.VRChat
 
@@ -547,114 +695,113 @@ while (-not $sync.Exit) {
                 if ($key -ne $st.LastKey) {
                     $st.LastKey = $key
                     $st.ChangedAt = Get-Date
-                    $st.Scroll = 0
                     $st.LastLyric = $null
-                    $st.GenreEmoji = $null
-                    $st.Deco = $decoChars[(Get-Random -Maximum $decoChars.Count)]
                     $sync.SongCount++
                     $sync.Genre = $null
-                    $song = "$($info.Title) - $($info.Artist)"
-                    if ($cfg.History) {
-                        $line = "{0}`t{1}`t{2}`t{3}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $info.Title, $info.Artist, [int]$info.Length.TotalSeconds
-                        Add-Content $sync.HistoryPath $line -Encoding UTF8
-                    }
-                    $sync.SongEvent = $song
-                    $sync.Cover = $null; $sync.CoverKey = "none|$key"; $st.CoverKey = $null
+                    # Erst in den Verlauf, wenn der Song wirklich gehoert wurde (nicht beim Durchskippen)
+                    $st.Played = 0.0
+                    $st.LogPending = "{0}`t{1}`t{2}`t{3}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $info.Title, $info.Artist, [int]$info.Length.TotalSeconds
+                    $st.LogNeed = if ($info.Length.TotalSeconds -gt 0) { [Math]::Min(30, $info.Length.TotalSeconds / 2) } else { 30 }
+                    $sync.SongEvent = "$($info.Title) - $($info.Artist)"
+                    $sync.Cover = $null; $sync.CoverKey = "none|$key"
+                    # Spotify meldet direkt nach dem Wechsel oft noch das alte Cover -> kurz warten und spaeter nochmal pruefen
+                    $st.CoverSource = $null; $st.ThumbHash = $null; $st.ThumbTries = 0; $st.ThumbAt = $now.AddMilliseconds(1200); $st.WebCover = $null
                     $sync.SendNow = $true
-                    # Cover + Genre von iTunes
-                    $query = @((($info.Artist -split ',')[0].Trim()), (Clean-Title $info.Title))
-                    Start-Async 'itunes' $key {
+                    # Cover + Genre aus dem Netz (iTunes, dann Deezer, notfalls Kuenstlerbild) - nur fuers Panel
+                    $query = @((($info.Artist -split ',')[0].Trim()), (Search-Title $info.Title))
+                    Start-Async 'cover' $key {
                         param($q)
                         $artist = $q[0]; $title = $q[1]
                         $wc = New-Object System.Net.WebClient
                         $wc.Encoding = [System.Text.Encoding]::UTF8
-                        $url = "https://itunes.apple.com/search?entity=song&limit=15&term=$([uri]::EscapeDataString("$artist $title"))"
-                        $results = @(($wc.DownloadString($url) | ConvertFrom-Json).results)
-                        # Nur Treffer vom richtigen Kuenstler - lieber kein Cover als ein falsches
                         $norm = { param($s) ("$s".ToLower() -replace '[^\p{L}\p{N}]', '') }
                         $a = & $norm $artist; $t = & $norm $title
-                        $same = @($results | Where-Object { $n = & $norm $_.artistName; $n -and ($n.Contains($a) -or $a.Contains($n)) })
-                        $hit = $same | Where-Object { (& $norm $_.trackName).StartsWith($t) -or $t.StartsWith((& $norm $_.trackName)) } | Select-Object -First 1
-                        if (-not $hit) {
-                            # Song nicht gefunden: kein Cover, aber das Genre des Kuenstlers
-                            return [pscustomobject]@{ Bytes = $null; Genre = ($same | Select-Object -First 1).primaryGenreName }
+                        $sameArtist = { param($n) $n = & $norm $n; $n -and $a -and ($n.Contains($a) -or $a.Contains($n)) }
+                        $sameTitle = { param($n) $n = & $norm $n; $n -and $t -and ($n.StartsWith($t) -or $t.StartsWith($n)) }
+                        $genre = $null; $url = $null; $isArtistPic = $false
+                        # 1) iTunes (liefert auch das Genre)
+                        try {
+                            $r = $wc.DownloadString("https://itunes.apple.com/search?entity=song&limit=15&term=$([uri]::EscapeDataString("$artist $title"))") | ConvertFrom-Json
+                            $same = @($r.results | Where-Object { & $sameArtist $_.artistName })
+                            $genre = ($same | Select-Object -First 1).primaryGenreName
+                            $hit = $same | Where-Object { & $sameTitle $_.trackName } | Select-Object -First 1
+                            if ($hit) { $genre = $hit.primaryGenreName; if ($hit.artworkUrl100) { $url = $hit.artworkUrl100 -replace '100x100', '400x400' } }
+                        } catch {}
+                        # 2) Deezer (hat viele Songs, die bei iTunes fehlen)
+                        if (-not $url) {
+                            try {
+                                $dq = 'artist:"' + $artist + '" track:"' + $title + '"'
+                                $r = $wc.DownloadString("https://api.deezer.com/search?q=" + [uri]::EscapeDataString($dq)) | ConvertFrom-Json
+                                $hit = @($r.data) | Where-Object { (& $sameArtist $_.artist.name) -and (& $sameTitle $_.title) } | Select-Object -First 1
+                                if ($hit) { $url = $hit.album.cover_xl }
+                            } catch {}
                         }
-                        $bytes = if ($hit.artworkUrl100) { $wc.DownloadData(($hit.artworkUrl100 -replace '100x100', '300x300')) } else { $null }
-                        [pscustomobject]@{ Bytes = $bytes; Genre = $hit.primaryGenreName }
+                        # 3) Kein Cover gefunden -> Bild vom Kuenstler
+                        if (-not $url) {
+                            try {
+                                $r = $wc.DownloadString("https://api.deezer.com/search/artist?q=$([uri]::EscapeDataString($artist))") | ConvertFrom-Json
+                                $hit = @($r.data) | Where-Object { (& $norm $_.name) -eq $a } | Select-Object -First 1
+                                if ($hit -and $hit.picture_xl -and $hit.picture_xl -notmatch '/artist//') { $url = $hit.picture_xl; $isArtistPic = $true }
+                            } catch {}
+                        }
+                        $bytes = if ($url) { try { $wc.DownloadData($url) } catch { $null } } else { $null }
+                        [pscustomobject]@{ Bytes = $bytes; Genre = $genre; ArtistPic = $isArtistPic }
                     } $query
                 }
-                # Cover von Windows, falls der Player eins liefert
-                if ($st.CoverKey -ne $key -and $info.Thumbnail) {
+                # Cover von Spotify selbst (bestes Bild): erst nach kurzer Wartezeit, dann noch einmal pruefen
+                if ($info.Thumbnail -and $st.ThumbTries -lt 3 -and $now -ge $st.ThumbAt) {
+                    $st.ThumbTries++; $st.ThumbAt = $now.AddSeconds(2.5)
                     $bytes = try { Get-CoverBytes $info.Thumbnail } catch { $null }
-                    if ($bytes -and $bytes.Length -gt 0) { $sync.Cover = $bytes; $sync.CoverKey = $key; $st.CoverKey = $key }
+                    if ($bytes -and $bytes.Length -gt 100) {
+                        $hash = [Convert]::ToBase64String($md5.ComputeHash($bytes))
+                        if ($hash -ne $st.ThumbHash) {
+                            $st.ThumbHash = $hash; $st.CoverSource = 'spotify'
+                            $sync.Cover = $bytes; $sync.CoverKey = "$key|spotify|$($st.ThumbTries)"
+                        }
+                    }
                 }
             }
         }
         $info = $sync.Info
 
-        # iTunes-Ergebnis
-        $it = Receive-Async 'itunes'
+        # Cover/Genre aus dem Netz - nur nehmen, wenn Spotify selbst kein Bild geliefert hat
+        $it = Receive-Async 'cover'
         if ($it -and $it.Tag -eq $st.LastKey) {
             $res = $it.Result | Select-Object -First 1
             if ($res) {
-                if ($res.Bytes -and $st.CoverKey -ne $st.LastKey) { $sync.Cover = [byte[]]$res.Bytes; $sync.CoverKey = $st.LastKey; $st.CoverKey = $st.LastKey }
-                if ($res.Genre) {
-                    $sync.Genre = $res.Genre
-                    foreach ($k in $genreEmoji.Keys) { if ($res.Genre -match $k) { $st.GenreEmoji = $genreEmoji[$k]; break } }
-                    if ($cfg.GenreEmoji) { $sync.SendNow = $true }
-                }
+                if ($res.Bytes -and $st.CoverSource -ne 'spotify') { $st.CoverSource = 'web'; $sync.Cover = [byte[]]$res.Bytes; $sync.CoverKey = "$($st.LastKey)|web" }
+                if ($res.Genre) { $sync.Genre = $res.Genre }
             }
         }
+        Clear-Orphans
 
         # Hoerzeit zaehlen
         if ($info -and $info.Playing) {
+            # Hoechstens 5 s pro Runde - sonst zaehlt z. B. Standby als Hoerzeit
+            $delta = [Math]::Min(5, ($now - $st.LastTick).TotalSeconds)
             $today = Get-Date -Format 'yyyy-MM-dd'
-            $stats[$today] = [double]$stats[$today] + ($now - $st.LastTick).TotalSeconds
+            $stats[$today] = [double]$stats[$today] + $delta
             $sync.ListenToday = $stats[$today]
+            $st.Played += $delta
+            if ($st.LogPending -and $st.Played -ge $st.LogNeed) {
+                if ($cfg.History) { try { Add-Content $sync.HistoryPath $st.LogPending -Encoding UTF8 } catch { Log-Error "Verlauf: $_" } }
+                $st.LogPending = $null
+            }
         }
         $st.LastTick = $now
         if (($now - $st.StatsSaved).TotalSeconds -ge 60) { Save-Stats; $st.StatsSaved = $now }
 
-        # Zusatz-Infos
-        if ($cfg.WorldInfo -and $now -ge $next.World) { try { Update-WorldInfo } catch { Log-Error "VRChat-Log: $_" }; $next.World = $now.AddSeconds(2) }
-        # Stadt geaendert -> 2 s nach dem letzten Tastendruck neu laden (nicht bei jedem Buchstaben)
-        if ("$($cfg.WeatherCity)" -ne $st.WeatherCity) { $st.WeatherCity = "$($cfg.WeatherCity)"; $next.Weather = $now.AddSeconds(2); $sync.Weather = $null }
-        if ($cfg.WeatherOn -and $cfg.WeatherCity -and $now -ge $next.Weather -and -not (Test-AsyncRunning 'weather')) {
-            $next.Weather = $now.AddMinutes(15)
-            Start-Async 'weather' '' {
-                param($city)
-                $wc = New-Object System.Net.WebClient
-                $wc.Encoding = [System.Text.Encoding]::UTF8
-                $g = ($wc.DownloadString("https://geocoding-api.open-meteo.com/v1/search?count=1&language=de&name=$([uri]::EscapeDataString($city))") | ConvertFrom-Json).results | Select-Object -First 1
-                if (-not $g) { return "" }
-                $w = ($wc.DownloadString("https://api.open-meteo.com/v1/forecast?latitude=$($g.latitude)&longitude=$($g.longitude)&current=temperature_2m,weather_code") | ConvertFrom-Json).current
-                $c = [int]$w.weather_code
-                $icon = if ($c -eq 0) { 0x2600 } elseif ($c -le 3) { 0x26C5 } elseif ($c -le 48) { 0x1F32B } elseif ($c -le 67) { 0x1F327 } elseif ($c -le 77) { 0x2744 } elseif ($c -le 82) { 0x1F326 } else { 0x26C8 }
-                "$([char]::ConvertFromUtf32($icon)) $([Math]::Round([double]$w.temperature_2m))$([char]0x00B0)C"
-            } $cfg.WeatherCity
-        }
-        $w = Receive-Async 'weather'
-        if ($w) {
-            $sync.Weather = "$($w.Result | Select-Object -First 1)"
-            $sync.WeatherStatus = if ($sync.Weather) { "Aktuell: $($sync.Weather)" } else { "Stadt '$($cfg.WeatherCity)' nicht gefunden" }
-            if (-not $sync.Weather) { $next.Weather = $now.AddMinutes(1) }   # bald nochmal versuchen
-            $sync.SendNow = $true
-        }
+        # Welt + Spielerzahl immer mitlesen, solange VRChat laeuft (fuers Dashboard und die Chatbox)
+        if ($sync.VRChat -and $now -ge $next.World) { try { Update-WorldInfo } catch { Log-Error "VRChat-Log: $_" }; $next.World = $now.AddSeconds(3) }
 
-        if ($cfg.GpuStats -and $now -ge $next.Gpu -and -not (Test-AsyncRunning 'gpu')) {
-            $next.Gpu = $now.AddSeconds(5)
-            Start-Async 'gpu' '' {
-                $sum = (Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Name -like '*engtype_3D' } | Measure-Object UtilizationPercentage -Sum).Sum
-                [int][Math]::Min(100, [double]$sum)
-            } $null
-        }
-        $g = Receive-Async 'gpu'; if ($g) { $st.Gpu = $g.Result | Select-Object -First 1 }
-
-        # Signale von VRChat (Sprechen, AFK, Avatar-Knoepfe)
+        # Sprechen / Pause -> sofort aus- bzw. wieder einblenden.
+        # Sprechen zaehlt nur, wenn VRChat das aktive Fenster ist (sonst redest du z. B. gerade in Discord)
         try { Update-Speaking } catch { Log-Error "Mikrofon: $_" }
-        $speakingHide = $cfg.HideWhileSpeaking -and $sync.Speaking
+        if ($now -ge $next.Focus) { $sync.VrFocused = [Native]::ForegroundProcessName() -eq 'VRChat'; $next.Focus = $now.AddSeconds(1) }
+        $speakingHide = $cfg.HideWhileSpeaking -and $sync.Speaking -and $sync.VrFocused
         if ($speakingHide -ne $st.WasSpeaking) { $st.WasSpeaking = $speakingHide; $sync.SendNow = $true }
+        $paused = $now -lt $sync.PauseUntil
+        if ($paused -ne $st.WasPaused) { $st.WasPaused = $paused; $sync.SendNow = $true }
 
         # Lyrics: sofort laden, sofort zeigen und jede neue Zeile direkt senden
         if (-not $eco -and ($cfg.ShowLyrics -or $cfg.LyricsMode) -and -not $cfg.Compact -and $cfg.Enabled -and (Show-Song $info)) {
@@ -671,14 +818,14 @@ while (-not $sync.Exit) {
                 $fresh = try { Get-SpotifyInfo } catch { $null }
                 if ($fresh) { $info = $fresh; $sync.Info = $fresh; $sync.SampleTime = [DateTime]::Now }
             }
-            $text = if (-not $cfg.Enabled -or $speakingHide) { "" } else { Build-ChatText $info }
+            $text = if (-not $cfg.Enabled -or $speakingHide -or $paused) { "" } else { Build-ChatText $info }
             $sync.Text = $text
 
             if ($due) {
                 $sync.SendNow = $false
                 $next.Send = $now.AddSeconds([double]$cfg.Interval)
                 if (-not $sync.VRChat) { $st.Cleared = $true }
-                elseif ($text) { Send-Chatbox $text; $st.Cleared = $false; $st.LastSend = [DateTime]::Now }
+                elseif ($text) { Send-Chatbox $text; $st.Cleared = $false }
                 else { Clear-Chatbox }
             }
         }
@@ -688,7 +835,9 @@ while (-not $sync.Exit) {
     Start-Sleep -Milliseconds $(if (-not $sync.VRChat) { 400 } else { 100 })
 }
 
-# Beim Beenden: Statistik sichern, Chatbox leeren (ausser "stehen lassen" ist an)
+# Beim Beenden: Statistik sichern, Chatbox leeren
 Save-Stats
 if ($sync.VRChat) { try { Send-Chatbox "" } catch {} }
 if ($udp) { $udp.Close() }
+$md5.Dispose()
+try { $pool.Close() } catch {}
