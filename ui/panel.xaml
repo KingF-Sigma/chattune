@@ -1,6 +1,6 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Spotify Chatbox" Width="1080" Height="720" MinWidth="900" MinHeight="600"
+        Title="ChatTune" Width="1080" Height="720" MinWidth="900" MinHeight="600"
         WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
         Background="{DynamicResource C.Bg}" FontFamily="{DynamicResource Body}"
         UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display">
@@ -26,7 +26,7 @@
               <TextBlock Text="&#x266B;" FontFamily="Segoe UI Symbol" FontSize="19" Foreground="{DynamicResource C.AccentText}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-              <TextBlock Text="Spotify Chatbox" FontFamily="{DynamicResource Display}" FontWeight="Bold" FontSize="15" Foreground="{DynamicResource C.Text}"/>
+              <TextBlock Text="ChatTune" FontFamily="{DynamicResource Display}" FontWeight="Bold" FontSize="15" Foreground="{DynamicResource C.Text}"/>
               <TextBlock x:Name="TxtSubtitle" FontSize="11" Foreground="{DynamicResource C.Dim}"/>
             </StackPanel>
           </StackPanel>

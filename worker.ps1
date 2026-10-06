@@ -660,7 +660,7 @@ while (-not $sync.Exit) {
             if ($cmd -eq 'test') {
                 # Verbindungstest: kurze Nachricht, dann normal weiter
                 try {
-                    Send-Chatbox "$($emoji.Check) Spotify Chatbox: $(L 'Verbindung OK' 'Connection OK')"
+                    Send-Chatbox "$($emoji.Check) ChatTune: $(L 'Verbindung OK' 'Connection OK')"
                     $st.Cleared = $false; $next.Send = $now.AddSeconds(4)
                     $sync.TestResult = 'ok'
                 } catch { $sync.TestResult = "$_"; Log-Error "Test: $_" }

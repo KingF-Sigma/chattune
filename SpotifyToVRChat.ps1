@@ -823,18 +823,19 @@ $ui.TxtSubtitle.Text = T "für VRChat"; $ui.TxtMenu.Text = T "MENÜ"
 # Hintergrundbild an die runden Ecken anpassen
 $hero.add_SizeChanged({ $d.HeroArt.Clip = New-Object System.Windows.Media.RectangleGeometry((New-Object System.Windows.Rect(0, 0, $this.ActualWidth, $this.ActualHeight)), 20, 20) })
 # Abdunkeln ueber dem Cover (Text bleibt lesbar), links leicht in der Songfarbe getoent
-function Update-HeroShade {
+function New-ShadeBrush([int]$tintAlpha = 110, [int]$baseAlpha = 165) {
     $base = [System.Windows.Media.ColorConverter]::ConvertFromString($(if ("$($cfg.Theme)" -eq 'light') { '#FFFFFF' } else { '#000000' }))
     $tint = [System.Windows.Media.ColorConverter]::ConvertFromString((Get-ActiveAccent))
     $g = [System.Windows.Media.LinearGradientBrush]::new()
     $g.StartPoint = '0,0'; $g.EndPoint = '1,0.4'
-    $c1 = [System.Windows.Media.Color]::FromArgb(110, [byte](($base.R + $tint.R) / 2), [byte](($base.G + $tint.G) / 2), [byte](($base.B + $tint.B) / 2))
-    $c2 = $base; $c2.A = 165
+    $c1 = [System.Windows.Media.Color]::FromArgb($tintAlpha, [byte](($base.R + $tint.R) / 2), [byte](($base.G + $tint.G) / 2), [byte](($base.B + $tint.B) / 2))
+    $c2 = $base; $c2.A = $baseAlpha
     [void]$g.GradientStops.Add([System.Windows.Media.GradientStop]::new($c1, 0))
     [void]$g.GradientStops.Add([System.Windows.Media.GradientStop]::new($c2, 0.75))
     $g.Freeze()
-    $d.HeroShade.Background = $g
+    $g
 }
+function Update-HeroShade { $d.HeroShade.Background = New-ShadeBrush }
 Update-HeroShade
 # Equalizer neben "Jetzt laeuft" (huepft nur, wenn Musik laeuft)
 $eqLoops = @(
@@ -1673,7 +1674,7 @@ function Set-Enabled([bool]$on) {
     Update-TrayIcon; Update-EnabledButton
     Save-Config
     $sync.Dirty = $true; $sync.SendNow = $true
-    if (-not $window.IsVisible) { $tray.ShowBalloonTip(1500, "Spotify Chatbox", (T $(if ($on) { 'Chatbox eingeschaltet' } else { 'Chatbox ausgeschaltet' })), 'None') }
+    if (-not $window.IsVisible) { $tray.ShowBalloonTip(1500, "ChatTune", (T $(if ($on) { 'Chatbox eingeschaltet' } else { 'Chatbox ausgeschaltet' })), 'None') }
 }
 
 # Pause in Minuten (0 = Pause beenden)
@@ -1684,7 +1685,7 @@ function Set-Pause([int]$minutes) {
     $sync.Dirty = $true; $sync.SendNow = $true
     if (-not $window.IsVisible) {
         $msg = if ($minutes -gt 0) { "$(T 'Pausiert bis') $($sync.PauseUntil.ToString('HH:mm'))" } else { T 'Chatbox läuft wieder' }
-        $tray.ShowBalloonTip(1500, "Spotify Chatbox", $msg, 'None')
+        $tray.ShowBalloonTip(1500, "ChatTune", $msg, 'None')
     }
 }
 
@@ -1743,11 +1744,11 @@ function Build-Shortcut {
         $icoPath = Join-Path $dir 'assets\app.ico'
         if (-not (Test-Path $icoPath)) { throw "App-Symbol fehlt: $icoPath" }
 
-        $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) "Spotify Chatbox.lnk"))
+        $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) "ChatTune.lnk"))
         $lnk.TargetPath = "wscript.exe"; $lnk.Arguments = "`"$(Join-Path $dir 'Panel.vbs')`""
         $lnk.WorkingDirectory = $dir; $lnk.IconLocation = $icoPath
         $lnk.Save()
-        $exeStatus.Text = T "Fertig: Verknüpfung 'Spotify Chatbox' auf dem Desktop."
+        $exeStatus.Text = T "Fertig: Verknüpfung 'ChatTune' auf dem Desktop."
     } catch {
         $exeStatus.Text = "Fehler: $_"
         [void]$sync.Errors.Add("Verknüpfung: $_")
@@ -1842,7 +1843,7 @@ function Update-TrayIcon {
 }
 $tray = New-Object System.Windows.Forms.NotifyIcon
 Update-TrayIcon
-$tray.Text = "Spotify Chatbox"
+$tray.Text = "ChatTune"
 $tray.Visible = -not $Snapshot
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 function Add-MenuItem($parent, [string]$text, [scriptblock]$onClick) {
@@ -1960,37 +1961,46 @@ function Set-Cover([byte[]]$bytes) {
 $toastXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent" Topmost="True" ShowInTaskbar="False"
-        ShowActivated="False" ResizeMode="NoResize" Width="398" Height="126" FontFamily="{DynamicResource Body}">
-  <Border x:Name="Box" Margin="12" CornerRadius="19" Background="Transparent" BorderBrush="{DynamicResource C.Accent}" BorderThickness="1.5" Padding="12" Cursor="Hand" ClipToBounds="True">
-    <Border.Effect><DropShadowEffect BlurRadius="22" ShadowDepth="4" Direction="270" Opacity="0.32"/></Border.Effect>
-    <Border.RenderTransform><TranslateTransform/></Border.RenderTransform>
-    <Grid>
-      <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="3"/></Grid.RowDefinitions>
-      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
-      <Border x:Name="Backdrop" Grid.RowSpan="2" Grid.ColumnSpan="2" CornerRadius="14" Opacity="0.72">
-        <Border.Effect><BlurEffect Radius="26" RenderingBias="Performance" KernelType="Gaussian"/></Border.Effect>
+        ShowActivated="False" ResizeMode="NoResize" Width="436" Height="132" FontFamily="{DynamicResource Body}">
+  <!-- Nur 10 px Rand fuer den Schatten, alles andere ist die Karte selbst -->
+  <Grid x:Name="Box" Margin="10" Cursor="Hand">
+    <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
+    <Border CornerRadius="20" Background="{DynamicResource C.Solid}">
+      <Border.Effect><DropShadowEffect BlurRadius="18" ShadowDepth="3" Direction="270" Opacity="0.38"/></Border.Effect>
+    </Border>
+    <Grid x:Name="Inner">
+      <Border x:Name="Backdrop" Margin="-60">
+        <Border.Effect><BlurEffect Radius="45" RenderingBias="Performance" KernelType="Gaussian"/></Border.Effect>
       </Border>
-      <Border Grid.RowSpan="2" Grid.ColumnSpan="2" CornerRadius="14" Background="{DynamicResource C.Solid}" Opacity="0.76"/>
-      <Border x:Name="Art" Width="68" Height="68" CornerRadius="13" Background="{DynamicResource C.Input}"/>
-      <StackPanel Grid.Column="1" Margin="14,0,4,0" VerticalAlignment="Center">
-        <TextBlock x:Name="Cap" FontSize="9.5" FontWeight="Bold" Foreground="{DynamicResource C.Accent}"/>
-        <TextBlock x:Name="Song" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource C.Text}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
-        <TextBlock x:Name="Artist" FontSize="12" Foreground="{DynamicResource C.Dim}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
-        <TextBlock x:Name="Hint" FontSize="9.5" Foreground="{DynamicResource C.Dim}" Opacity="0.72" Margin="0,5,0,0"/>
-      </StackPanel>
-      <Border x:Name="ProgressTrack" Grid.Row="1" Grid.ColumnSpan="2" Height="2" CornerRadius="1" Background="{DynamicResource C.Hover}" VerticalAlignment="Bottom">
-        <Border x:Name="Progress" Width="0" HorizontalAlignment="Left" CornerRadius="1" Background="{DynamicResource C.Accent}"/>
+      <Border x:Name="Shade"/>
+      <Grid Margin="12">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+        <Border x:Name="Art" Width="88" Height="88" CornerRadius="14" Background="{DynamicResource C.Input}">
+          <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="2" Direction="270" Opacity="0.45"/></Border.Effect>
+        </Border>
+        <StackPanel Grid.Column="1" Margin="16,0,10,0" VerticalAlignment="Center">
+          <TextBlock x:Name="Cap" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource C.Accent}"/>
+          <TextBlock x:Name="Song" FontFamily="{DynamicResource Display}" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource C.Text}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+          <TextBlock x:Name="Artist" FontSize="13" Foreground="{DynamicResource C.Text}" Opacity="0.72" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+        </StackPanel>
+      </Grid>
+      <!-- Restzeit als duenne Linie ganz unten an der Kante -->
+      <Border x:Name="ProgressTrack" Height="3" VerticalAlignment="Bottom" Background="#1AFFFFFF">
+        <Border x:Name="Progress" Width="0" HorizontalAlignment="Left" Background="{DynamicResource C.Accent}"/>
       </Border>
     </Grid>
-  </Border>
+    <Border CornerRadius="20" BorderBrush="#22FFFFFF" BorderThickness="1" IsHitTestVisible="False"/>
+  </Grid>
 </Window>
 '@
 $toast = @{ Win = [Windows.Markup.XamlReader]::Parse($toastXaml); DueAt = $null; HideAt = $null; EnterX = 0; EnterY = 0 }
-foreach ($n in 'Box', 'Art', 'Cap', 'Song', 'Artist', 'Hint', 'Progress', 'ProgressTrack', 'Backdrop') { $toast[$n] = $toast.Win.FindName($n) }
+foreach ($n in 'Box', 'Inner', 'Art', 'Cap', 'Song', 'Artist', 'Progress', 'ProgressTrack', 'Backdrop', 'Shade') { $toast[$n] = $toast.Win.FindName($n) }
+# Unschaerfe und Fortschrittslinie an den runden Ecken abschneiden
+$toast.Inner.add_SizeChanged({ $this.Clip = New-Object System.Windows.Media.RectangleGeometry((New-Object System.Windows.Rect(0, 0, $this.ActualWidth, $this.ActualHeight)), 20, 20) })
 $toast.Box.add_MouseLeftButtonUp({ $toast.Win.Hide(); Show-Panel })
 function Send-XSOverlay([string]$title, [string]$content) {
     $json = @{ messageType = 1; index = 0; timeout = 3.0; height = 120.0; opacity = 1.0; volume = 0.0; audioPath = ""
-               title = $title; content = $content; useBase64Icon = $false; icon = "default"; sourceApp = "Spotify Chatbox" } | ConvertTo-Json -Compress
+               title = $title; content = $content; useBase64Icon = $false; icon = "default"; sourceApp = "ChatTune" } | ConvertTo-Json -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
     $u = New-Object System.Net.Sockets.UdpClient
     try { [void]$u.Send($bytes, $bytes.Length, "127.0.0.1", 42069) } catch { } finally { $u.Close() }
@@ -2002,8 +2012,8 @@ function Show-SongToast([switch]$Force) {
     if (-not $cfg.NotifyDesktop) { return }
     if ($window.IsActive -and -not $Force) { return }   # Panel ist offen und im Vordergrund: dort sieht man es eh
     $toast.Cap.Text = (T "JETZT LÄUFT")
-    $toast.Hint.Text = T "Klicken zum Dashboard"
     $toast.Song.Text = $i.Title; $toast.Artist.Text = $i.Artist
+    $toast.Shade.Background = New-ShadeBrush 120 175
     if ($d.Cover.Background -is [System.Windows.Media.ImageBrush]) {
         $toast.Art.Background = $d.Cover.Background
         if ($cfg.PopupCoverBackground) { $toast.Backdrop.Background = $d.Cover.Background }
@@ -2017,6 +2027,7 @@ function Show-SongToast([switch]$Force) {
     $top = "$($cfg.NotifyPosition)".StartsWith('top')
     $toast.Win.Left = if ($left) { $wa.Left + 8 } else { $wa.Right - $toast.Win.Width - 8 }
     $toast.Win.Top = if ($top) { $wa.Top + 8 } else { $wa.Bottom - $toast.Win.Height - 8 }
+    if ($Snapshot) { $toast.Win.Left = -20000; $toast.Win.Top = -20000 }   # Testbilder nie sichtbar aufpoppen lassen
     $toast.EnterX = if ($left) { -34 } else { 34 }; $toast.EnterY = if ($top) { -18 } else { 18 }
     $toast.Box.RenderTransform.X = $toast.EnterX; $toast.Box.RenderTransform.Y = $toast.EnterY
     $toast.Box.Opacity = 0
@@ -2213,10 +2224,25 @@ function Start-Snapshot {
             }
             if ($snap.Index -ge 1 -and $snap.Index -le $nav.Count) { Save-Snap $ui.Root $nav[$snap.Index - 1].Key }
             # zum Schluss noch Pause-Menue und Songwechsel-Fenster
-            if ($snap.Index -eq $nav.Count) { $navButtons['dash'].IsChecked = $true; $ui.BtnPause.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent))); Show-SongToast -Force; $snap.Index++; return }
+            if ($snap.Index -eq $nav.Count) {
+                $navButtons['dash'].IsChecked = $true
+                # Testbilder ausserhalb des Bildschirms zeichnen, damit beim Nutzer nichts kurz aufblitzt
+                # Pause-Menue nicht oeffnen (Popups landen immer sichtbar am Bildschirmrand), sondern frei zeichnen
+                $pausePop.Child = $null
+                $popCard.Measure((New-Object System.Windows.Size(328, [double]::PositiveInfinity)))
+                $popCard.Arrange((New-Object System.Windows.Rect($popCard.DesiredSize)))
+                Show-SongToast -Force
+                $snap.Index++; return
+            }
             if ($snap.Index -gt $nav.Count) {
                 Save-Snap $popCard 'pause-menu'
-                Save-Snap $toast.Win.Content 'toast'
+                # Popup in voller Fenstergroesse (inkl. Schattenrand) auf dunklem Grund
+                $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap([int]$toast.Win.Width, [int]$toast.Win.Height, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
+                $dv = New-Object System.Windows.Media.DrawingVisual; $dc = $dv.RenderOpen()
+                $dc.DrawRectangle((New-Brush '#3A3F4A'), $null, (New-Object System.Windows.Rect(0, 0, $toast.Win.Width, $toast.Win.Height))); $dc.Close()
+                $rtb.Render($dv); $rtb.Render($toast.Win.Content)
+                $enc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder; $enc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($rtb))
+                $fs = [System.IO.File]::Create((Join-Path $Snapshot 'toast.png')); $enc.Save($fs); $fs.Close()
                 $snap.Timer.Stop()
                 Set-Content (Join-Path $Snapshot "errors.txt") ($sync.Errors.ToArray() -join "`r`n") -Encoding UTF8
                 Exit-App; return
